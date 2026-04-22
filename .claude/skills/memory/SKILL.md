@@ -1,46 +1,90 @@
 ---
 name: memory
-description: Persistent memory using Google NotebookLM. TRIGGER this skill when: starting work on an unfamiliar project (load context), making an architectural or product decision (save it), completing a significant task (save a summary), or when the user references past decisions that aren't in the current context (query). Use sparingly — only for genuinely important context worth persisting across sessions.
+description: Topic-based collaborative knowledge library backed by Google NotebookLM. Every save, query, and summarize is scoped to a topic (one notebook per topic). ALWAYS resolve or invent a topic via list-topics before saving, querying, or summarizing. TRIGGER when starting work on an unfamiliar project (load context), making an architectural or product decision (save it), completing a significant task (save a summary), or when past decisions are referenced but missing from current context.
 ---
 
-# NotebookLM Memory Skill
+# NotebookLM Memory Skill (v2, topic-partitioned)
 
-Provides persistent memory across Claude Code sessions via Google NotebookLM.
+A collaborative, topic-indexed knowledge library that persists across Claude Code
+sessions via Google NotebookLM. Every topic is a dedicated notebook; adding to
+an existing topic is preferred over inventing a new one.
 
-## When to Use
+## Knowledge-library philosophy
 
-- **load**: At the start of a session on a project you haven't recently worked on
-- **save**: After making an architectural decision, choosing a library, or resolving a non-obvious bug
-- **query**: When context from a previous session is needed (e.g. "what did we decide about auth?")
-- **summarize**: At the end of a productive session with important decisions or completed features
+One library, many topics. Claude alone is responsible for semantic
+classification; the helper script stays deterministic and never guesses, fuzzy-
+matches, or tries ML heuristics. Topic resolution happens in the chat layer via
+`list-topics` → pick → `--topic=`.
 
-## Commands
+## Topic workflow (non-negotiable)
 
-All commands use the helper script `~/.claude/scripts/notebooklm_memory.py`.
+1. Run `list-topics` first — cheap; results are cached for 1 hour on disk.
+2. Choose the existing topic that best matches the material.
+3. If none fits, invent a short kebab-case name (2-4 words).
+4. Invoke the subcommand with `--topic=<name>`.
 
-### Load context for a project
-```bash
-python3 ~/.claude/scripts/notebooklm_memory.py load --project "$PWD"
+The script exits with code `2` when `--topic=` is missing in a TTY shell.
+Hooks receive a silent fallback because the installed hook scripts export
+`CLAUDE_HOOK=1`.
+
+## When to use each subcommand
+
+- **`list-topics`** — discovery; always run first when Claude does not already
+  know which topic to use.
+- **`save`** — durable facts, decisions, findings. Defaults to `notes.create`
+  (does not count toward the 50-source cap). Pass `--as-source` for indexed
+  content; that triggers the merge check.
+- **`query`** — retrieval from a single topic. Cross-topic iteration requires
+  `NOTEBOOKLM_CROSS_TOPIC_QUERY=1`.
+- **`load`** — session priming. `--all-topics` summarises the top 5 topics by
+  `last_updated`; gated behind `NOTEBOOKLM_LOAD_ON_START=1`.
+- **`summarize`** — end-of-session capture. Defaults to the `session-log`
+  topic (override via `--topic` or `NOTEBOOKLM_SESSION_TOPIC`).
+- **`share`** — invite collaborators to an existing topic notebook.
+- **`merge`** — manual archive when a notebook nears the 50-source cap;
+  `--force` bypasses the threshold and the same-day short-circuit.
+
+## Team sharing
+
+Populate `~/.claude/notebooklm-team.json`:
+
+```json
+{
+  "emails": ["alice@example.com", "bob@example.com"],
+  "role": "editor"
+}
 ```
 
-### Save a note
-```bash
-python3 ~/.claude/scripts/notebooklm_memory.py save "We chose JWT over sessions because the API is stateless and needs mobile support"
-```
+When a new topic notebook is created, collaborators are auto-invited. The
+NotebookLM SDK's share API is feature-detected; if unavailable, a manual URL is
+printed to stderr so the save still succeeds. Absent or empty config → silent
+no-op. Malformed JSON → one-shot stderr warning, then ignored.
 
-### Query past context
-```bash
-python3 ~/.claude/scripts/notebooklm_memory.py query "What database schema decisions were made?"
-```
+## Merge mechanic
 
-### Save session summary
-Find the current session transcript (most recently modified `.jsonl` in `~/.claude/projects/`), then:
-```bash
-python3 ~/.claude/scripts/notebooklm_memory.py summarize /path/to/transcript.jsonl
-```
+When a topic's source count reaches `NOTEBOOKLM_MERGE_AT` (default `40`), all
+sources are concatenated verbatim into one `Merged Archive <utc-ts> (N sources)`
+source. Originals are deleted when the SDK exposes `sources.delete`; otherwise
+they are retained and a loud stderr warning fires once the count remains above
+`MERGE_AT + 10`. An advisory `fcntl` file lock and a same-UTC-day archive-title
+short-circuit prevent duplicate archives under concurrency.
 
 ## Configuration
 
-- **Notebook name**: Set via `NOTEBOOKLM_NOTEBOOK` env var (default: `"Claude Code Memory"`)
-- **Auth**: Run `notebooklm login` once to authenticate with Google
-- **Install**: `pip install 'notebooklm-py[browser]' && playwright install chromium`
+| Env var | Default | Purpose |
+|---|---|---|
+| `NOTEBOOKLM_MERGE_AT` | `40` | Source count that triggers merge. |
+| `NOTEBOOKLM_TOPIC_PREFIX` | `""` | Optional prefix stored in notebook titles; stripped on output. |
+| `NOTEBOOKLM_FALLBACK_TOPIC` | `"general"` | Topic used in hook context when `--topic` is missing. |
+| `NOTEBOOKLM_SESSION_TOPIC` | `"session-log"` | Target topic for `summarize` without `--topic`. |
+| `NOTEBOOKLM_LOAD_ON_START` | unset | Set to `1` to enable SessionStart `load --all-topics`. |
+| `NOTEBOOKLM_CROSS_TOPIC_QUERY` | unset | Set to `1` to allow `query` without `--topic`. |
+| `CLAUDE_HOOK` | unset | Automatically set to `1` by the installed hook scripts. |
+| `NOTEBOOKLM_NOTEBOOK` | — | **Removed** in v2. Warn-once to stderr if still set, then ignored. |
+
+## Non-goals
+
+- Automatic migration of the legacy `"Claude Code Memory"` notebook. On first
+  `list-topics`, a one-shot stderr notice shows the legacy notebook URL; no
+  content is rewritten.
+- Windows support. The merge lock uses `fcntl`, which is POSIX-only.

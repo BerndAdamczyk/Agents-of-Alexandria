@@ -1,6 +1,7 @@
 #!/bin/bash
 # Load NotebookLM memory context at session start + auto-update check.
 # Skips silently if notebooklm-py is not installed or not authenticated.
+export CLAUDE_HOOK=1
 set -euo pipefail
 
 if ! python3 -c "import notebooklm" 2>/dev/null; then
@@ -35,6 +36,11 @@ if [ -f "$CONFIG" ]; then
     fi
 fi
 
-# --- Load project context ---
+# --- Cheap topic-list preflight so Claude sees available topics (1h cached) ---
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-python3 ~/.claude/scripts/notebooklm_memory.py load --project "$PROJECT_DIR" 2>/dev/null || true
+python3 ~/.claude/scripts/notebooklm_memory.py list-topics 2>/dev/null || true
+
+# --- Opt-in: per-topic summaries (heavier; off by default) ---
+if [ "${NOTEBOOKLM_LOAD_ON_START:-0}" = "1" ]; then
+    python3 ~/.claude/scripts/notebooklm_memory.py load --all-topics --project "$PROJECT_DIR" 2>/dev/null || true
+fi

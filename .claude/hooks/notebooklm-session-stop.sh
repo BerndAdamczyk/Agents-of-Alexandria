@@ -1,6 +1,7 @@
 #!/bin/bash
 # Save session summary to NotebookLM when Claude stops.
 # Reads transcript_path from stdin JSON. Skips silently on any error.
+export CLAUDE_HOOK=1
 set -euo pipefail
 
 if ! python3 -c "import notebooklm" 2>/dev/null; then
