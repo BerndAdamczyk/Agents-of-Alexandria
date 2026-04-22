@@ -9,22 +9,13 @@ This repository ships a global Claude Code memory skill backed by Google Noteboo
 ### One-time setup
 
 ```bash
-# 1. Install the Python library
-pip install "notebooklm-py[browser]"
-playwright install chromium
+# 1. Clone and run the installer (handles deps, file copying, settings.json)
+git clone <repo-url> notebooklm-memory
+cd notebooklm-memory
+./install.sh
 
-# 2. Authenticate with Google
+# 2. Authenticate with Google (opens a browser)
 notebooklm login
-
-# 3. Install skill files globally
-cp .claude/scripts/notebooklm_memory.py ~/.claude/scripts/
-cp .claude/commands/memory.md           ~/.claude/commands/
-cp .claude/skills/memory/SKILL.md       ~/.claude/skills/memory/
-cp .claude/hooks/notebooklm-session-start.sh ~/.claude/hooks/
-cp .claude/hooks/notebooklm-session-stop.sh  ~/.claude/hooks/
-chmod +x ~/.claude/hooks/notebooklm-session-*.sh
-
-# 4. Merge hooks into ~/.claude/settings.json (see .claude/hooks/ for reference config)
 ```
 
 ### Usage
