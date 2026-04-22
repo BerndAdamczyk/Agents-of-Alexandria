@@ -23,6 +23,13 @@ cp "$REPO_DIR/.claude/hooks/notebooklm-session-stop.sh"  "$CLAUDE_DIR/hooks/"
 chmod +x "$CLAUDE_DIR/hooks/notebooklm-session-start.sh" \
          "$CLAUDE_DIR/hooks/notebooklm-session-stop.sh"
 
+# Write install config for auto-update
+INSTALLED_HASH=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+cat > "$CLAUDE_DIR/scripts/.notebooklm-memory-config" <<EOF
+NOTEBOOKLM_MEMORY_REPO="$REPO_DIR"
+NOTEBOOKLM_MEMORY_HASH="$INSTALLED_HASH"
+EOF
+
 # Merge hooks and permissions into ~/.claude/settings.json
 SETTINGS="$CLAUDE_DIR/settings.json"
 if [ ! -f "$SETTINGS" ]; then
