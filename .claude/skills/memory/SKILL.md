@@ -19,6 +19,8 @@ matches, or tries ML heuristics. Topic resolution happens in the chat layer via
 ## Topic workflow (non-negotiable)
 
 1. Run `list-topics` first — cheap; results are cached for 1 hour on disk.
+   **If the SessionStart hook already printed the topic list in this session's
+   context, reuse it — do not re-invoke `list-topics`.**
 2. Choose the existing topic that best matches the material.
 3. If none fits, invent a short kebab-case name (2-4 words).
 4. Invoke the subcommand with `--topic=<name>`.
@@ -75,6 +77,7 @@ short-circuit prevent duplicate archives under concurrency.
 |---|---|---|
 | `NOTEBOOKLM_MERGE_AT` | `40` | Source count that triggers merge. |
 | `NOTEBOOKLM_TOPIC_PREFIX` | `""` | Optional prefix stored in notebook titles; stripped on output. |
+| `NOTEBOOKLM_TOPIC_EXCLUDE` | `""` | Regex (Python `re.search` on the stripped title). Matching notebooks are hidden from `list-topics`, `load`, and cross-topic query. Invalid regex warns once and is ignored. |
 | `NOTEBOOKLM_FALLBACK_TOPIC` | `"general"` | Topic used in hook context when `--topic` is missing. |
 | `NOTEBOOKLM_SESSION_TOPIC` | `"session-log"` | Target topic for `summarize` without `--topic`. |
 | `NOTEBOOKLM_LOAD_ON_START` | unset | Set to `1` to enable SessionStart `load --all-topics`. |

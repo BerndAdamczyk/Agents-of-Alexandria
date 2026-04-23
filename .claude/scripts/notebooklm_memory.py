@@ -7,6 +7,7 @@ import asyncio
 import fcntl
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ import click
 DEFAULT_FALLBACK_TOPIC = os.environ.get("NOTEBOOKLM_FALLBACK_TOPIC", "general")
 MERGE_AT = int(os.environ.get("NOTEBOOKLM_MERGE_AT", "40"))
 TOPIC_PREFIX = os.environ.get("NOTEBOOKLM_TOPIC_PREFIX", "")
+TOPIC_EXCLUDE = os.environ.get("NOTEBOOKLM_TOPIC_EXCLUDE", "")
 SESSION_TOPIC = os.environ.get("NOTEBOOKLM_SESSION_TOPIC", "session-log")
 TEAM_CONFIG_PATH = Path.home() / ".claude" / "notebooklm-team.json"
 
@@ -86,9 +88,13 @@ def _run(coro):
 
 # --- user-named helpers ---
 
+ALLOWED_TEAM_ROLES = ("editor", "viewer")
+
+
 def _load_team_config() -> dict:
     """Return {"emails": [...], "role": "editor"|"viewer"} or {}.
-    Absent / empty / malformed → {} (warns once for malformed JSON)."""
+    Absent / empty / malformed → {} (warns once for malformed JSON).
+    Invalid role → default 'editor' with a one-shot stderr warning."""
     if not TEAM_CONFIG_PATH.exists():
         return {}
     try:
@@ -100,7 +106,17 @@ def _load_team_config() -> dict:
         role = data.get("role", "editor")
         if not isinstance(emails, list):
             emails = []
-        return {"emails": [str(e) for e in emails if e], "role": str(role)}
+        role_norm = str(role).strip().lower()
+        if role_norm not in ALLOWED_TEAM_ROLES:
+            if not TEAM_WARNED_FLAG.exists():
+                click.echo(
+                    f"[team-config] invalid role {role!r}; defaulting to "
+                    f"'editor'. Allowed: {', '.join(ALLOWED_TEAM_ROLES)}.",
+                    err=True,
+                )
+                _touch(TEAM_WARNED_FLAG)
+            role_norm = "editor"
+        return {"emails": [str(e) for e in emails if e], "role": role_norm}
     except (OSError, ValueError, json.JSONDecodeError):
         if not TEAM_WARNED_FLAG.exists():
             click.echo(
@@ -126,6 +142,24 @@ def _strip_prefix(title: str) -> str:
     if TOPIC_PREFIX and title.startswith(TOPIC_PREFIX):
         return title[len(TOPIC_PREFIX):]
     return title
+
+
+try:
+    _TOPIC_EXCLUDE_RE = re.compile(TOPIC_EXCLUDE) if TOPIC_EXCLUDE else None
+except re.error as _exc:
+    click.echo(
+        f"[warn] NOTEBOOKLM_TOPIC_EXCLUDE invalid regex ({_exc}); ignoring.",
+        err=True,
+    )
+    _TOPIC_EXCLUDE_RE = None
+
+
+def _is_excluded_title(title: str) -> bool:
+    """True if the notebook title matches NOTEBOOKLM_TOPIC_EXCLUDE.
+    Matching is on the prefix-stripped name, re.search semantics."""
+    if _TOPIC_EXCLUDE_RE is None:
+        return False
+    return bool(_TOPIC_EXCLUDE_RE.search(_strip_prefix(title)))
 
 
 async def _list_notebooks(client):
@@ -289,9 +323,14 @@ async def _share_notebook_with_team(client, nb_id, emails=None, role=None) -> No
     )
 
 
+ARCHIVE_TITLE_PREFIX = "Merged Archive "
+
+
 async def _merge_sources_if_needed(client, nb_id, force: bool = False) -> None:
     """Archive and (best-effort) delete sources when count >= MERGE_AT.
-    Advisory fcntl lock, same-UTC-day short-circuit, stalled-merge warning."""
+    Existing 'Merged Archive ' sources are excluded from the merge set to
+    prevent recursive re-archival. Unreadable sources are retained (not
+    fatal); only successfully-merged originals are deleted."""
     sources = await _list_sources(client, nb_id)
     if sources is None:
         click.echo(
@@ -299,7 +338,12 @@ async def _merge_sources_if_needed(client, nb_id, force: bool = False) -> None:
             err=True,
         )
         return
-    if not force and len(sources) < MERGE_AT:
+
+    mergeable = [
+        s for s in sources
+        if not (getattr(s, "title", "") or "").startswith(ARCHIVE_TITLE_PREFIX)
+    ]
+    if not force and len(mergeable) < MERGE_AT:
         return
 
     try:
@@ -319,19 +363,17 @@ async def _merge_sources_if_needed(client, nb_id, force: bool = False) -> None:
         if not force:
             for src in sources:
                 t = getattr(src, "title", "") or ""
-                if t.startswith(f"Merged Archive {today}"):
+                if t.startswith(f"{ARCHIVE_TITLE_PREFIX}{today}"):
                     return  # same-day short-circuit
 
         parts = []
-        for src in sources:
+        merged_srcs = []
+        skipped = []
+        for src in mergeable:
             text = await _get_source_text(client, src)
             if text is None:
-                click.echo(
-                    f"[merge] aborted: source "
-                    f"'{getattr(src, 'title', '<unknown>')}' unreadable.",
-                    err=True,
-                )
-                return
+                skipped.append(getattr(src, "title", "") or "<unknown>")
+                continue
             stitle = getattr(src, "title", "") or "<untitled>"
             sdate = (
                 getattr(src, "created_at", None)
@@ -339,10 +381,28 @@ async def _merge_sources_if_needed(client, nb_id, force: bool = False) -> None:
                 or ""
             )
             parts.append(f"=== Source: {stitle} | {sdate} ===\n{text}")
+            merged_srcs.append(src)
+
+        if not parts:
+            click.echo(
+                f"[merge] aborted: no readable sources "
+                f"(skipped {len(skipped)}).",
+                err=True,
+            )
+            return
+
+        if skipped:
+            preview = ", ".join(skipped[:3]) + ("..." if len(skipped) > 3 else "")
+            click.echo(
+                f"[merge] {len(skipped)} unreadable source(s) retained: {preview}",
+                err=True,
+            )
 
         merged = "\n\n".join(parts)
         utc_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        archive_title = f"Merged Archive {utc_ts} ({len(sources)} sources)"
+        archive_title = (
+            f"{ARCHIVE_TITLE_PREFIX}{utc_ts} ({len(merged_srcs)} sources)"
+        )
         try:
             await client.sources.add_text(nb_id, title=archive_title, content=merged)
         except (AttributeError, NotImplementedError, TypeError) as e:
@@ -357,7 +417,7 @@ async def _merge_sources_if_needed(client, nb_id, force: bool = False) -> None:
                 err=True,
             )
         else:
-            for src in sources:
+            for src in merged_srcs:
                 try:
                     await delete_api(getattr(src, "id", None))
                 except (AttributeError, NotImplementedError, TypeError):
@@ -504,6 +564,8 @@ def query_cmd(topic, question):
                     continue
                 if TOPIC_PREFIX and not nb_title.startswith(TOPIC_PREFIX):
                     continue
+                if _is_excluded_title(nb_title):
+                    continue
                 label = _strip_prefix(nb_title)
                 try:
                     result = await client.chat.ask(nb.id, question)
@@ -544,6 +606,8 @@ def load_cmd(topic, project, all_topics):
                 if not t or t == LEGACY_NOTEBOOK_TITLE:
                     continue
                 if TOPIC_PREFIX and not t.startswith(TOPIC_PREFIX):
+                    continue
+                if _is_excluded_title(t):
                     continue
                 topic_nbs.append(nb)
             topic_nbs.sort(key=_nb_sort_key, reverse=True)
@@ -599,6 +663,7 @@ def load_cmd(topic, project, all_topics):
             if getattr(nb, "title", "")
             and getattr(nb, "title", "") != LEGACY_NOTEBOOK_TITLE
             and (not TOPIC_PREFIX or getattr(nb, "title", "").startswith(TOPIC_PREFIX))
+            and not _is_excluded_title(getattr(nb, "title", ""))
         })
         click.echo(
             f"[NotebookLM Memory — {len(titles)} topics for project={project_name}]"
@@ -693,6 +758,8 @@ def list_topics_cmd(as_json):
             if not t or t == LEGACY_NOTEBOOK_TITLE:
                 continue
             if TOPIC_PREFIX and not t.startswith(TOPIC_PREFIX):
+                continue
+            if _is_excluded_title(t):
                 continue
             entries.append({
                 "title": _strip_prefix(t),

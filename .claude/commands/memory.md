@@ -9,6 +9,10 @@ from the user, FIRST run `list-topics`. Read the existing topics, pick the best
 semantic match, or invent a short kebab-case name (e.g. `auth`, `db-schema`,
 `payment-flow`) when none fits. Then invoke the subcommand with `--topic=<name>`.
 
+If the SessionStart hook already printed the topic list earlier in this
+session, reuse it — do NOT invoke `list-topics` again. The output is cached
+on disk for 1 hour, but skipping the redundant call keeps the turn tighter.
+
 The script's `--topic` flag is the contract:
 - In an interactive shell, omitting it exits with code 2 and prints
   `no topic provided; run 'list-topics' and retry with --topic=<name>`.
