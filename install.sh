@@ -5,7 +5,18 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${HOME}/.claude"
 
+# Resolve Python: env override → notebooklm venv → system python3
+PYTHON3="${NOTEBOOKLM_PYTHON:-}"
+if [ -z "$PYTHON3" ]; then
+    if [ -x "$HOME/.notebooklm-env/bin/python3" ]; then
+        PYTHON3="$HOME/.notebooklm-env/bin/python3"
+    else
+        PYTHON3="python3"
+    fi
+fi
+
 echo "Installing NotebookLM memory skill for Claude Code..."
+echo "  Using Python: $PYTHON3"
 
 # Create target directories
 mkdir -p \
@@ -29,6 +40,7 @@ cat > "$CLAUDE_DIR/scripts/.notebooklm-memory-config" <<EOF
 NOTEBOOKLM_MEMORY_REPO="$REPO_DIR"
 NOTEBOOKLM_MEMORY_HASH="$INSTALLED_HASH"
 NOTEBOOKLM_MEMORY_SKILL_VERSION="2"
+NOTEBOOKLM_PYTHON="$PYTHON3"
 EOF
 
 # Stub team-sharing config (opt-in; edit to add collaborators)
@@ -49,10 +61,12 @@ if [ ! -f "$SETTINGS" ]; then
     echo '{}' > "$SETTINGS"
 fi
 
-python3 - "$SETTINGS" <<'PYEOF'
+"$PYTHON3" - "$SETTINGS" "$PYTHON3" <<'PYEOF'
 import json, sys
 
 path = sys.argv[1]
+resolved_python = sys.argv[2]
+
 with open(path) as f:
     cfg = json.load(f)
 
@@ -72,12 +86,13 @@ cfg["hooks"].setdefault("Stop", [])
 if stop_hook not in cfg["hooks"]["Stop"]:
     cfg["hooks"]["Stop"].append(stop_hook)
 
-# Permission glob for the helper script.
-# The trailing '*' already covers every new subcommand (save, query, load,
-# summarize, list-topics, share, merge) — no change needed at upgrade time.
-perm = "Bash(python3 ~/.claude/scripts/notebooklm_memory.py*)"
-if perm not in cfg["permissions"]["allow"]:
-    cfg["permissions"]["allow"].append(perm)
+# Permission globs for the helper script (python3 fallback + resolved python).
+for perm in [
+    "Bash(python3 ~/.claude/scripts/notebooklm_memory.py*)",
+    f"Bash({resolved_python} ~/.claude/scripts/notebooklm_memory.py*)",
+]:
+    if perm not in cfg["permissions"]["allow"]:
+        cfg["permissions"]["allow"].append(perm)
 
 with open(path, "w") as f:
     json.dump(cfg, f, indent=4)
@@ -87,10 +102,10 @@ print(f"Updated {path}")
 PYEOF
 
 # Install Python dependency
-if ! python3 -c "import notebooklm" 2>/dev/null; then
+if ! "$PYTHON3" -c "import notebooklm" 2>/dev/null; then
     echo "Installing notebooklm-py..."
-    pip install "notebooklm-py[browser]" --quiet
-    python3 -m playwright install chromium 2>/dev/null || true
+    "$PYTHON3" -m pip install "notebooklm-py[browser]" --quiet
+    "$PYTHON3" -m playwright install chromium 2>/dev/null || true
 fi
 
 echo ""
@@ -98,8 +113,8 @@ echo "Done. Next step: authenticate with Google."
 echo "  notebooklm login"
 echo ""
 echo "Then try:"
-echo "  python3 ~/.claude/scripts/notebooklm_memory.py list-topics"
-echo "  python3 ~/.claude/scripts/notebooklm_memory.py save --topic=demo 'Hello topic-partitioned memory'"
+echo "  $PYTHON3 ~/.claude/scripts/notebooklm_memory.py list-topics"
+echo "  $PYTHON3 ~/.claude/scripts/notebooklm_memory.py save --topic=demo 'Hello topic-partitioned memory'"
 echo ""
 echo "What's new in v2 (topic-partitioned):"
 echo "  - Each topic is its own NotebookLM notebook — one library, many topics."

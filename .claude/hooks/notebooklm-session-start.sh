@@ -4,7 +4,17 @@
 export CLAUDE_HOOK=1
 set -euo pipefail
 
-if ! python3 -c "import notebooklm" 2>/dev/null; then
+# Resolve Python: env override → notebooklm venv → system python3
+PYTHON3="${NOTEBOOKLM_PYTHON:-}"
+if [ -z "$PYTHON3" ]; then
+    if [ -x "$HOME/.notebooklm-env/bin/python3" ]; then
+        PYTHON3="$HOME/.notebooklm-env/bin/python3"
+    else
+        PYTHON3="python3"
+    fi
+fi
+
+if ! "$PYTHON3" -c "import notebooklm" 2>/dev/null; then
     exit 0
 fi
 
@@ -38,9 +48,9 @@ fi
 
 # --- Cheap topic-list preflight so Claude sees available topics (1h cached) ---
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-python3 ~/.claude/scripts/notebooklm_memory.py list-topics 2>/dev/null || true
+"$PYTHON3" ~/.claude/scripts/notebooklm_memory.py list-topics 2>/dev/null || true
 
 # --- Opt-in: per-topic summaries (heavier; off by default) ---
 if [ "${NOTEBOOKLM_LOAD_ON_START:-0}" = "1" ]; then
-    python3 ~/.claude/scripts/notebooklm_memory.py load --all-topics --project "$PROJECT_DIR" 2>/dev/null || true
+    "$PYTHON3" ~/.claude/scripts/notebooklm_memory.py load --all-topics --project "$PROJECT_DIR" 2>/dev/null || true
 fi
