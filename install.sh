@@ -106,5 +106,6 @@ echo "  - Each topic is its own NotebookLM notebook — one library, many topics
 echo "  - Claude picks or invents the topic via 'list-topics' before saving."
 echo "  - Default merge threshold: 40 sources (override with NOTEBOOKLM_MERGE_AT)."
 echo "  - Opt-in env vars: NOTEBOOKLM_LOAD_ON_START, NOTEBOOKLM_CROSS_TOPIC_QUERY."
+echo "  - Hide notebooks from listings via NOTEBOOKLM_TOPIC_EXCLUDE=<regex>."
 echo "  - Team sharing via $TEAM_CONFIG (auto-invite on notebook create)."
 echo "  - NOTEBOOKLM_NOTEBOOK is removed; legacy notebook content is not migrated."
