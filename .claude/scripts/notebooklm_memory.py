@@ -76,7 +76,7 @@ def _run(coro):
 
     async def _main():
         try:
-            async with NotebookLMClient.from_storage() as client:
+            async with await NotebookLMClient.from_storage() as client:
                 return await coro(client)
         except AuthError:
             click.echo("Error: Not authenticated with Google NotebookLM.", err=True)
