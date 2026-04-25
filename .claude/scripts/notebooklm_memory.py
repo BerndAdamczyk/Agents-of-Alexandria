@@ -25,7 +25,7 @@ TEAM_CONFIG_PATH = Path.home() / ".claude" / "notebooklm-team.json"
 # --- v2 internal constants ---
 NOTEBOOKLM_MEMORY_SKILL_VERSION = "2"
 TOPIC_CACHE_PATH = Path.home() / ".claude" / "scripts" / ".notebooklm-topic-cache"
-TOPIC_CACHE_TTL_SEC = 3600
+TOPIC_CACHE_TTL_SEC = int(os.environ.get("NOTEBOOKLM_CACHE_TTL", "3600"))
 MERGE_LOCK_PATH = Path.home() / ".claude" / ".notebooklm-merge.lock"
 LEGACY_NOTICE_FLAG = Path.home() / ".claude" / "scripts" / ".notebooklm-legacy-notice-shown"
 ENV_WARNED_FLAG = Path.home() / ".claude" / "scripts" / ".notebooklm-env-warned"
@@ -737,9 +737,11 @@ def summarize_cmd(topic, transcript_path):
 @cli.command(name="list-topics")
 @click.option("--json", "as_json", is_flag=True, default=False,
               help="Emit JSON.")
-def list_topics_cmd(as_json):
+@click.option("--refresh", is_flag=True, default=False,
+              help="Bypass cache and fetch from NotebookLM immediately.")
+def list_topics_cmd(as_json, refresh):
     """List all topic notebooks (TOPIC_PREFIX stripped). Cached 1h."""
-    cached = _read_topic_cache()
+    cached = None if refresh else _read_topic_cache()
     if cached is not None:
         if as_json:
             click.echo(json.dumps({"topics": cached}))
